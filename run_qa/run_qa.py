@@ -27,7 +27,7 @@ from typing import Optional
 import datasets
 from datasets import load_dataset
 
-import evaluate
+import evaluate_covid
 import transformers
 from trainer_qa import QuestionAnsweringAdapterTrainer, QuestionAnsweringTrainer
 from transformers import (
@@ -593,7 +593,7 @@ def main():
         references = [{"id": ex["id"], "answers": ex[answer_column_name]} for ex in examples]
         return EvalPrediction(predictions=formatted_predictions, label_ids=references)
 
-    metric = evaluate.load("squad_v2" if data_args.version_2_with_negative else "squad")
+    metric = evaluate_covid.load("squad_v2" if data_args.version_2_with_negative else "squad")
 
     def compute_metrics(p: EvalPrediction):
         return metric.compute(predictions=p.predictions, references=p.label_ids)

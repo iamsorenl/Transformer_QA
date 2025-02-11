@@ -33,7 +33,7 @@ from datasets import load_dataset
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
-import evaluate
+import evaluate_covid
 import transformers
 from accelerate import Accelerator
 from accelerate.logging import get_logger
@@ -703,7 +703,7 @@ def main():
         references = [{"id": ex["id"], "answers": ex[answer_column_name]} for ex in examples]
         return EvalPrediction(predictions=formatted_predictions, label_ids=references)
 
-    metric = evaluate.load("squad_v2" if args.version_2_with_negative else "squad")
+    metric = evaluate_covid.load("squad_v2" if args.version_2_with_negative else "squad")
 
     # Create and fill numpy array of size len_of_validation_data * max_length_of_output_tensor
     def create_and_fill_np_array(start_or_end_logits, dataset, max_len):

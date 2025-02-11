@@ -27,7 +27,7 @@ from typing import List, Optional, Tuple
 import datasets
 from datasets import load_dataset
 
-import evaluate
+import evaluate_covid
 import transformers
 from trainer_seq2seq_qa import QuestionAnsweringSeq2SeqTrainer
 from transformers import (
@@ -597,7 +597,7 @@ def main():
         pad_to_multiple_of=8 if training_args.fp16 else None,
     )
 
-    metric = evaluate.load("squad_v2" if data_args.version_2_with_negative else "squad")
+    metric = evaluate_covid.load("squad_v2" if data_args.version_2_with_negative else "squad")
 
     def compute_metrics(p: EvalPrediction):
         return metric.compute(predictions=p.predictions, references=p.label_ids)
