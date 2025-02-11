@@ -11,7 +11,8 @@ EPOCHS=3
 LEARNING_RATE=3e-5
 
 # Run training
-python train_adapter_qa.py \
+echo "Starting training on GPU 3..."
+CUDA_VISIBLE_DEVICES=3 python run_qa.py \
     --model_name_or_path $MODEL_NAME \
     --train_adapter \
     --train_file $TRAIN_FILE \
