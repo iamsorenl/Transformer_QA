@@ -154,7 +154,7 @@ trainer = Trainer(
 trainer.train()
 
 predictions_output = trainer.predict(test_dataset)
-start_logits, end_logits = predictions_output.predictions
+start_logits, end_logits = predictions_output.predictions[:2]
 
 with open("qa_evaluation_results.json", "w") as f:
     json.dump(predictions_output.metrics, f, indent=4)
