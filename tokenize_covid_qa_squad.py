@@ -92,69 +92,6 @@ def tokenize_features(examples):
     inputs["end_positions"] = end_positions
     return inputs
 
-'''
-def tokenize_features(examples):
-    """Tokenizes and computes start/end positions."""
-    examples["question"] = [q.lstrip() for q in examples["question"]]
-
-    tokenized_examples = tokenizer(
-        examples["question"],
-        examples["context"],
-        truncation="only_second",
-        max_length=384,
-        stride=128,
-        return_overflowing_tokens=True,
-        return_offsets_mapping=True,
-        padding="max_length",
-    )
-
-    sample_mapping = tokenized_examples.pop("overflow_to_sample_mapping")
-    offset_mapping = tokenized_examples.pop("offset_mapping")
-
-    # ✅ Ensure batch consistency
-    expanded_examples = {key: [] for key in examples.keys()}
-    expanded_examples["start_positions"] = []
-    expanded_examples["end_positions"] = []
-
-    for i, sample_idx in enumerate(sample_mapping):
-        # ✅ Expand all example fields
-        for key in examples.keys():
-            expanded_examples[key].append(examples[key][sample_idx])
-
-        answers = examples["answers"][sample_idx]
-
-        if len(answers) == 0 or len(answers[0]["text"]) == 0:
-            expanded_examples["start_positions"].append(0)
-            expanded_examples["end_positions"].append(0)
-        else:
-            start_char = answers[0]["answer_start"]
-            end_char = start_char + len(answers[0]["text"])
-
-            sequence_ids = tokenized_examples.sequence_ids(i)
-            token_start_index = 0
-            token_end_index = len(offset_mapping[i]) - 1
-
-            # ✅ Handle token span errors
-            while token_start_index < len(offset_mapping[i]) and (
-                sequence_ids[token_start_index] != 1 or offset_mapping[i][token_start_index][0] <= start_char
-            ):
-                token_start_index += 1
-
-            while token_end_index >= 0 and (
-                sequence_ids[token_end_index] != 1 or offset_mapping[i][token_end_index][1] >= end_char
-            ):
-                token_end_index -= 1
-
-            if token_start_index >= len(offset_mapping[i]) or token_end_index >= len(offset_mapping[i]):
-                expanded_examples["start_positions"].append(0)
-                expanded_examples["end_positions"].append(0)
-            else:
-                expanded_examples["start_positions"].append(token_start_index)
-                expanded_examples["end_positions"].append(token_end_index)
-
-    return expanded_examples | tokenized_examples
-'''
-
 def tokenize_and_save():
     """Tokenizes the dataset and saves it in Arrow format."""
     os.makedirs(SAVE_DIR, exist_ok=True)
