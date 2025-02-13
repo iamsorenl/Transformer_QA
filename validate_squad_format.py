@@ -1,38 +1,60 @@
 import json
 
-def validate_squad_json(file_path):
-    with open(file_path, "r", encoding="utf-8") as file:
-        squad_data = json.load(file)
+DATA_PATHS = {
+    "train": "covid-qa/covid-qa-train-squad.json",
+    "dev": "covid-qa/covid-qa-dev-squad.json",
+    "test": "covid-qa/covid-qa-test-squad.json",
+}
 
-    print(f"✅ Checking: {file_path}")
+def validate_squad_format(file_path):
+    """Validates SQuAD-formatted JSON to check for inconsistencies."""
+    with open(file_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
     
-    # Check top-level keys
-    if "version" not in squad_data or "data" not in squad_data:
-        print("❌ Invalid JSON format: Missing 'version' or 'data' key")
-        return
+    errors = []
     
-    # Check articles
-    for article in squad_data["data"]:
-        if "title" not in article or "paragraphs" not in article:
-            print("❌ Missing 'title' or 'paragraphs' in an article")
-            return
-        
+    for article in data["data"]:
+        if "title" not in article:
+            errors.append(f"❌ Missing 'title' in {file_path}")
+
         for paragraph in article["paragraphs"]:
-            if "context" not in paragraph or "qas" not in paragraph:
-                print("❌ Missing 'context' or 'qas' in a paragraph")
-                return
-            
+            context = paragraph.get("context", "")
+
+            if not isinstance(context, str) or len(context) == 0:
+                errors.append(f"❌ Invalid 'context' in {file_path}")
+
             for qa in paragraph["qas"]:
-                if "id" not in qa or "question" not in qa or "answers" not in qa:
-                    print("❌ Missing 'id', 'question', or 'answers' in a QA pair")
-                    return
-                
-                if not qa["is_impossible"] and not qa["answers"]:
-                    print(f"❌ Question {qa['id']} is answerable but has no answers!")
-                    return
+                q_id = qa.get("id", "UNKNOWN_ID")
+                question = qa.get("question", "")
 
-    print("✅ JSON structure is valid!\n")
+                if not isinstance(question, str) or len(question) == 0:
+                    errors.append(f"❌ Missing or invalid 'question' for ID {q_id} in {file_path}")
 
-# Validate all generated SQuAD JSON files
-for split in ["train", "dev", "test"]:
-    validate_squad_json(f"covid-qa/covid-qa-{split}-squad.json")
+                is_impossible = qa.get("is_impossible", False)
+                answers = qa.get("answers", [])
+
+                if not is_impossible:
+                    if len(answers) == 0:
+                        errors.append(f"❌ No answers for non-impossible question ID {q_id} in {file_path}")
+
+                    for ans in answers:
+                        text = ans.get("text", "")
+                        start = ans.get("answer_start", -1)
+
+                        if not isinstance(text, str) or len(text) == 0:
+                            errors.append(f"❌ Empty answer text for ID {q_id} in {file_path}")
+                        
+                        if not isinstance(start, int) or start < 0 or start >= len(context):
+                            errors.append(f"❌ Invalid answer_start {start} for ID {q_id} (context length: {len(context)}) in {file_path}")
+
+    return errors
+
+# ✅ Run validation on all splits
+for split, path in DATA_PATHS.items():
+    print(f"🔍 Validating {split} set...")
+    issues = validate_squad_format(path)
+    if issues:
+        print("\n".join(issues))
+    else:
+        print(f"✅ {split} set is correctly formatted!")
+
