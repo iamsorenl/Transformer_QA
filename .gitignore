@@ -174,3 +174,4 @@ cython_debug/
 
 #ignore arrow files
 covid_qa_tokenized/
+backup_arrows/
