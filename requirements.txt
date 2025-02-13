@@ -1,4 +1,5 @@
 accelerate==1.3.0
+adapter-transformers==4.0.0
 adapters @ git+https://github.com/adapter-hub/adapter-transformers.git@326d071c4dc41ab05f2a0f520813e9f4f5032979
 aiohappyeyeballs==2.4.4
 aiohttp==3.11.12

@@ -172,6 +172,5 @@ cython_debug/
 # macOS
 .DS_Store
 
-#ignore arrow files
-covid_qa_tokenized/
-backup_arrows/
+#ignore model
+covid_qa_roberta_lora/
