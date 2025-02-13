@@ -173,4 +173,4 @@ cython_debug/
 .DS_Store
 
 #ignore arrow files
-/covid_qa_tokenized
+covid_qa_tokenized/
