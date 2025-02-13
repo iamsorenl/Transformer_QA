@@ -139,9 +139,78 @@ def tokenize_features(examples):
 
     return expanded_examples | tokenized_examples
 
+def postprocess_predictions(predictions, dataset):
+    """Convert model logits into readable text predictions"""
+    # Debug 
+    print(f"Predictions type: {type(predictions)}")
+    print(f"Predictions shape: {np.array(predictions).shape}")
+    print(f"First 5 Predictions: {predictions[:5]}")
+
+    if len(predictions) > 2:
+        all_start_logits, all_end_logits = predictions[:2]  # ✅ Extract first two elements
+    else:
+        all_start_logits, all_end_logits = predictions
+
+    formatted_predictions = []
+    for i, example in enumerate(dataset):
+        start_logits = all_start_logits[i]
+        end_logits = all_end_logits[i]
+
+        # Get the most probable start and end positions
+        start_index = np.argmax(start_logits)
+        end_index = np.argmax(end_logits)
+
+        # Extract answer from original context
+        context = example["context"]
+        tokens = tokenizer.convert_ids_to_tokens(example["input_ids"])
+
+        if start_index < len(tokens) and end_index < len(tokens) and start_index <= end_index:
+            answer_tokens = tokens[start_index : end_index + 1]
+            answer_text = tokenizer.convert_tokens_to_string(answer_tokens)
+        else:
+            answer_text = ""
+
+        formatted_predictions.append({
+            "id": example["id"],
+            "prediction_text": answer_text
+        })
+
+    return formatted_predictions
+
+def compute_metrics(eval_pred):
+    """Compute Exact Match (EM) and F1 for QA with actual references."""
+    predictions, _ = eval_pred
+
+    # Convert raw logits to readable answers
+    formatted_predictions = postprocess_predictions(predictions, test_dataset)
+
+    # Load actual reference answers from test dataset
+    test_data = load_data("test")  # Load full dataset to get real answers
+    references = [
+        {"id": ex["id"], "answers": ex["answers"]}
+        for ex in test_data
+    ]
+
+    # Compute the real evaluation metrics
+    results = eval_metric.compute(predictions=formatted_predictions, references=references)
+
+    # Add additional fields
+    results["total"] = len(predictions[0])  # Fix total to count predictions properly
+    results["HasAns_total"] = results.get("total", 0)
+    results["HasAns_exact"] = results.get("exact", 0)
+    results["HasAns_f1"] = results.get("f1", 0)
+
+    return results
+
 train_dataset = load_data("train").map(tokenize_features, batched=True, remove_columns=["title", "answers"])
 dev_dataset = load_data("dev").map(tokenize_features, batched=True, remove_columns=["title", "answers"])
-test_dataset = load_data("test").map(tokenize_features, batched=True, remove_columns=["title", "answers"])
+
+test_features = load_data("test").map(tokenize_features, batched=True, remove_columns=["title", "answers"])
+
+if "offset_mapping" in test_features.column_names:
+    test_dataset = test_features.remove_columns(["offset_mapping"])
+else:
+    test_dataset = test_features
 
 trainer = Trainer(
     model=model,
@@ -149,16 +218,25 @@ trainer = Trainer(
     train_dataset=train_dataset,
     eval_dataset=test_dataset,
     tokenizer=tokenizer,
+    compute_metrics=compute_metrics,
 )
 
 trainer.train()
 
 predictions_output = trainer.predict(test_dataset)
-start_logits, end_logits = predictions_output.predictions[:2]
 
+# Convert predictions properly
+formatted_predictions = postprocess_predictions(predictions_output.predictions, test_dataset)
+
+# Generate correct evaluation scores
+metrics = compute_metrics((predictions_output.predictions, None))
+
+# Save predictions separately for debugging
+with open("qa_predictions.json", "w") as f:
+    json.dump(formatted_predictions, f, indent=4, ensure_ascii=False)
+
+# Save to JSON file
 with open("qa_evaluation_results.json", "w") as f:
-    json.dump(predictions_output.metrics, f, indent=4)
+    json.dump(metrics, f, indent=4, ensure_ascii=False)
 
-print("Final Test Results:", json.dumps(predictions_output.metrics, indent=4))
-
-model.save_pretrained("./lora_roberta_qa")
+print("Final Test Results:", json.dumps(metrics, indent=4))
