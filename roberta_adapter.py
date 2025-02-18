@@ -1,10 +1,19 @@
+import os
 import json
-from transformers import AutoTokenizer, AutoModelForQuestionAnswering, TrainingArguments, Trainer, DefaultDataCollator
-from datasets import Dataset
-import numpy as np
 import torch
 import random
-from peft import LoraConfig, get_peft_model
+import numpy as np
+import torch.nn.functional as F  # ✅ For loss computation
+from tqdm.auto import tqdm
+from datasets import Dataset, load_dataset
+from transformers import (
+    AutoTokenizer,
+    AutoModelForQuestionAnswering,
+    TrainingArguments,
+    Trainer,
+    default_data_collator
+)
+from peft import LoraConfig, get_peft_model, PeftModel  # ✅ LoRA Import
 
 seed = 1234
 torch.manual_seed(seed)
@@ -13,137 +22,170 @@ random.seed(seed)
 
 MODEL_SAVE_PATH = "./covid_qa_roberta_lora"
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-model_name = "deepset/roberta-base-squad2"
-tokenizer = AutoTokenizer.from_pretrained(model_name)
-
-# Load the Covid-QA training and validation datasets
-DATA_FILES = {
+# ✅ Define Paths and Configuration
+DATA_PATH = {
     "train": "covid-qa/covid-qa-train.json",
-    "dev": "covid-qa/covid-qa-dev.json"
+    "dev": "covid-qa/covid-qa-dev.json",
 }
 
-datasets = {split: json.load(open(file, "r", encoding="utf-8")) for split, file in DATA_FILES.items()}
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+MODEL = "deepset/roberta-base-squad2"
 
-train_data = datasets["train"]
-dev_data = datasets["dev"]
-
-# Process dataset into Hugging Face format
-def process_data(data):
-    processed = {"id": [], "context": [], "question": [], "answers": []}
-    for entry in data["data"]:
-        for paragraph in entry["paragraphs"]:
-            context = paragraph["context"]
-            for qa in paragraph["qas"]:
-                if not qa["answers"]:
-                    continue  # Skip questions with no answers
-                processed["id"].append(qa["id"])
-                processed["context"].append(context)
-                processed["question"].append(qa["question"])
-                processed["answers"].append({
-                    "text": [ans["text"] for ans in qa["answers"]],
-                    "answer_start": [ans["answer_start"] for ans in qa["answers"]]
-                })
-    return Dataset.from_dict(processed)
-
-# Convert datasets
-train_dataset = process_data(train_data)
-dev_dataset = process_data(dev_data)
-
-def preprocess_function(examples):
-    questions = [q.strip() for q in examples["question"]]
-    inputs = tokenizer(
-        questions,
-        examples["context"],
-        max_length=512,
-        truncation="only_second",
-        return_offsets_mapping=True,
-        padding="max_length",
-    )
-    
-    offset_mapping = inputs.pop("offset_mapping")
-    answers = examples["answers"]
-    start_positions = []
-    end_positions = []
-    
-    for i, offset in enumerate(offset_mapping):
-        answer = answers[i]
-        start_char = answer["answer_start"][0]
-        end_char = answer["answer_start"][0] + len(answer["text"][0])
-        sequence_ids = inputs.sequence_ids(i)
-        
-        idx = 0
-        while sequence_ids[idx] != 1:
-            idx += 1
-        context_start = idx
-        while sequence_ids[idx] == 1:
-            idx += 1
-        context_end = idx - 1
-        
-        if offset[context_start][0] > end_char or offset[context_end][1] < start_char:
-            start_positions.append(0)
-            end_positions.append(0)
-        else:
-            idx = context_start
-            while idx <= context_end and offset[idx][0] <= start_char:
-                idx += 1
-            start_positions.append(idx - 1)
-            
-            idx = context_end
-            while idx >= context_start and offset[idx][1] >= end_char:
-                idx -= 1
-            end_positions.append(idx + 1)
-    
-    inputs["start_positions"] = start_positions
-    inputs["end_positions"] = end_positions
-    return inputs
-
-# Tokenize datasets
-train_dataset = train_dataset.map(preprocess_function, batched=True, remove_columns=["id", "question", "context", "answers"])
-dev_dataset = dev_dataset.map(preprocess_function, batched=True, remove_columns=["id", "question", "context", "answers"])
-
-data_collator = DefaultDataCollator()
-
-# Load model
-model = AutoModelForQuestionAnswering.from_pretrained(model_name).to(device)
-
-# Apply LoRA configuration
-lora_config = LoraConfig(
-    r=8,  # Rank of LoRA matrices
-    lora_alpha=32,  # Scaling factor
+# ✅ LoRA Configuration
+peft_config = LoraConfig(
+    r=8,  # LoRA rank
+    lora_alpha=16,  # Scaling factor
+    lora_dropout=0.1,  # Dropout for LoRA layers
     target_modules=["query", "value"],  # Apply LoRA to attention layers
-    lora_dropout=0.1,
-    bias="none"
 )
 
-# Wrap the model with LoRA
-model = get_peft_model(model, lora_config)
-model.print_trainable_parameters()
-
-training_args = TrainingArguments(
+# ✅ Training Hyperparameters
+TRAINING_ARGS = TrainingArguments(
     output_dir=MODEL_SAVE_PATH,
+    per_device_train_batch_size=8,
+    per_device_eval_batch_size=8,
+    num_train_epochs=3,
+    learning_rate=5e-5,
+    weight_decay=0.01,
     eval_strategy="epoch",
     save_strategy="epoch",
-    learning_rate=2e-5,
-    per_device_train_batch_size=16,
-    per_device_eval_batch_size=16,
-    num_train_epochs=5,
-    weight_decay=0.01,
-    save_total_limit=2,
-    load_best_model_at_end=False,
-    push_to_hub=False,
+    logging_dir="./logs",
+    logging_steps=100,
+    report_to="none",
 )
 
-trainer = Trainer(
+# ✅ Load Tokenizer
+tokenizer = AutoTokenizer.from_pretrained(MODEL)
+
+# ✅ Load Model
+model = AutoModelForQuestionAnswering.from_pretrained(MODEL)
+
+# ✅ Apply LoRA
+model = get_peft_model(model, peft_config)
+model.to(DEVICE)
+
+def load_json_file_to_dict(file_name: str):
+    """Load JSON file into a dictionary"""
+    return json.load(open(file_name))
+
+def preprocess_data(data_dict: dict):
+    """Pre-process data to SQuAD format"""
+    temp = {"id": [], "title": [], "context": [], "question": [], "answers": []}
+    for article in data_dict["data"]:
+        for paragraph in article["paragraphs"]:
+            for qa_pair in paragraph["qas"]:
+                for ans in qa_pair["answers"]:
+                    temp["answers"].append({"answer_start": [ans["answer_start"]], "text": [ans["text"]]})
+                    temp["question"].append(qa_pair["question"])
+                    temp["context"].append(paragraph["context"])
+                    temp["title"].append(paragraph["document_id"])
+                    temp["id"].append(qa_pair["id"])
+    return temp
+
+def load_data(split="dev"):
+    """Load dataset from JSON"""
+    data_dict = load_json_file_to_dict(DATA_PATH[split])
+    return Dataset.from_dict(preprocess_data(data_dict))
+
+def tokenize_features(examples):
+    """Tokenization function that also computes answer start/end positions."""
+    examples["question"] = [q.lstrip() for q in examples["question"]]
+
+    tokenized_examples = tokenizer(
+        examples["question"],
+        examples["context"],
+        truncation="only_second",
+        max_length=384,
+        stride=128,
+        return_overflowing_tokens=True,
+        return_offsets_mapping=True,  # Needed for mapping answer positions
+        padding="max_length",
+    )
+
+    sample_mapping = tokenized_examples.pop("overflow_to_sample_mapping")
+    offset_mapping = tokenized_examples.pop("offset_mapping")
+
+    tokenized_examples["start_positions"] = []
+    tokenized_examples["end_positions"] = []
+
+    for i, offsets in enumerate(offset_mapping):
+        input_ids = tokenized_examples["input_ids"][i]
+        cls_index = input_ids.index(tokenizer.cls_token_id)
+
+        sequence_ids = tokenized_examples.sequence_ids(i)
+        sample_index = sample_mapping[i]
+        answers = examples["answers"][sample_index]
+
+        # If no valid answer, assign CLS token as answer position
+        if len(answers["answer_start"]) == 0:
+            tokenized_examples["start_positions"].append(cls_index)
+            tokenized_examples["end_positions"].append(cls_index)
+        else:
+            start_char = answers["answer_start"][0]
+            end_char = start_char + len(answers["text"][0])
+
+            # Find token positions
+            token_start_index = 0
+            while sequence_ids[token_start_index] != (1 if tokenizer.padding_side == "right" else 0):
+                token_start_index += 1
+
+            token_end_index = len(input_ids) - 1
+            while sequence_ids[token_end_index] != (1 if tokenizer.padding_side == "right" else 0):
+                token_end_index -= 1
+
+            # Check if answer is inside the span
+            if not (offsets[token_start_index][0] <= start_char and offsets[token_end_index][1] >= end_char):
+                tokenized_examples["start_positions"].append(cls_index)
+                tokenized_examples["end_positions"].append(cls_index)
+            else:
+                while token_start_index < len(offsets) and offsets[token_start_index][0] <= start_char:
+                    token_start_index += 1
+                tokenized_examples["start_positions"].append(token_start_index - 1)
+
+                while offsets[token_end_index][1] >= end_char:
+                    token_end_index -= 1
+                tokenized_examples["end_positions"].append(token_end_index + 1)
+
+    return tokenized_examples
+
+# ✅ Load and preprocess datasets separately
+train_dataset = load_data("train")
+dev_dataset = load_data("dev")
+
+# ✅ Tokenize train and validation sets separately
+tokenized_train_dataset = train_dataset.map(tokenize_features, batched=True, remove_columns=train_dataset.column_names)
+tokenized_dev_dataset = dev_dataset.map(tokenize_features, batched=True, remove_columns=dev_dataset.column_names)
+
+class QuestionAnsweringTrainer(Trainer):
+    """Custom Trainer that computes loss for Question Answering"""
+
+    def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
+        """Custom loss function"""
+
+        outputs = model(**inputs)
+        start_logits = outputs.start_logits
+        end_logits = outputs.end_logits
+
+        start_positions = inputs["start_positions"]
+        end_positions = inputs["end_positions"]
+
+        # Compute loss (CrossEntropyLoss)
+        loss_start = F.cross_entropy(start_logits, start_positions)
+        loss_end = F.cross_entropy(end_logits, end_positions)
+        loss = (loss_start + loss_end) / 2  # Average both losses
+        
+        return (loss, outputs) if return_outputs else loss
+
+# ✅ Initialize Trainer
+trainer = QuestionAnsweringTrainer(
     model=model,
-    args=training_args,
-    train_dataset=train_dataset,
-    eval_dataset=dev_dataset,
+    args=TRAINING_ARGS,
+    train_dataset=tokenized_train_dataset,  
+    eval_dataset=tokenized_dev_dataset,  
     processing_class=tokenizer,
-    data_collator=data_collator,
 )
 
+# ✅ Train Model
 trainer.train()
 
 # Save fine-tuned model with LoRA
