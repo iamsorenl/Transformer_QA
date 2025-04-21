@@ -47,8 +47,8 @@ The work focuses on evaluating how well QA models generalize to out-of-domain da
 
 ### 1. Clone and install dependencies
 ```bash
-git clone https://github.com/your-username/robust-qa-transformers.git
-cd robust-qa-transformers
+git clone https://github.com/your-username/transformer_qa.git
+cd transformer_qa
 pip install -r requirements.txt
 ```
 
