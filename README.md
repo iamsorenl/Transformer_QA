@@ -76,6 +76,6 @@ matplotlib
 tqdm
 ```
 
-You’ll need a GPU or Apple MPS-compatible machine to efficiently run training jobs with `Trainer`.
+You’ll need a GPU or Apple MPS-compatible machine to efficiently run training jobs.
 
 ---
